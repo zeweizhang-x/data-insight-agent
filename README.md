@@ -73,11 +73,4 @@ LIMIT 10;
 ```
 
 ## 配置说明
-项目通过 `.env` 读取配置，请不要把真实 API Key 写进代码或提交到仓库。
-建议使用如下占位形式：
-
-```env
-LLM_API_KEY=your_api_key_here
-LLM_BASE_URL=https://your-api-base/v1
-LLM_MODEL=your_model_name
-```
+项目通过 `.env` 读取配置
