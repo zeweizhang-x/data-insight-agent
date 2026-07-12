@@ -17,30 +17,43 @@
 - `/health`
 - `/schema/list`
 - `/query/raw-sql`
+- Day 3 Text-to-SQL MVP
+  - LLM client
+  - Text-to-SQL prompt
+  - SQL 提取与基础校验
+  - `/query/text-to-sql`
 
 ## 本地启动方式
 
-### 1. 激活虚拟环境
+### 1. 配置环境变量
+在 `.env` 中补充 LLM 配置：
+```env
+LLM_API_KEY=your_api_key
+LLM_BASE_URL=https://your-openai-compatible-base-url/v1
+LLM_MODEL=your-model-name
+```
+
+### 2. 激活虚拟环境
 ```bash
 source .venv/bin/activate
 ```
 
-### 2. 启动 Docker Compose
+### 3. 启动 Docker Compose
 ```bash
 docker compose up -d
 ```
 
-### 3. 初始化数据库
+### 4. 初始化数据库
 ```bash
 python -m app.db.init_db
 ```
 
-### 4. 生成模拟数据
+### 5. 生成模拟数据
 ```bash
 python scripts/generate_fake_data.py
 ```
 
-### 5. 启动 FastAPI
+### 6. 启动 FastAPI
 ```bash
 uvicorn app.main:app --reload
 ```
@@ -50,6 +63,7 @@ uvicorn app.main:app --reload
 - 健康检查：`GET /health`
 - Schema 查看：`GET /schema/list`
 - 原始 SQL 查询：`POST /query/raw-sql`
+- Text-to-SQL：`POST /query/text-to-sql`
 
 ## 示例 SQL 查询
 ```sql
@@ -71,6 +85,25 @@ GROUP BY user_id
 ORDER BY total_spent DESC
 LIMIT 10;
 ```
+
+## `/query/text-to-sql` 示例请求
+```bash
+curl -X POST "http://127.0.0.1:8000/query/text-to-sql" \
+  -H "Content-Type: application/json" \
+  -d '{"question":"查询最近 7 天订单金额最高的前 10 个用户"}'
+```
+
+示例返回结构包含：
+- `question`
+- `sql`
+- `columns`
+- `rows`
+
+## 当前限制
+- 还没有 Schema RAG
+- 还没有 SQL 自动修复
+- 复杂 Join 可能失败
+- 目前只做基础 SQL 安全校验
 
 ## 配置说明
 项目通过 `.env` 读取配置
