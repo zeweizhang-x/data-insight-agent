@@ -33,3 +33,24 @@ def get_database_schema() -> list[dict]:
         )
 
     return schema_list
+
+
+def get_schema_text() -> str:
+    inspector = inspect(engine)
+    available_tables = set(inspector.get_table_names())
+
+    table_blocks: list[str] = []
+    for table_name in BUSINESS_TABLES:
+        if table_name not in available_tables:
+            continue
+
+        lines = [f"Table {table_name}:"]
+        for column in inspector.get_columns(table_name):
+            column_name = column["name"]
+            column_type = str(column["type"])
+            nullable = column["nullable"]
+            lines.append(f"- {column_name} ({column_type}, nullable={nullable})")
+
+        table_blocks.append("\n".join(lines))
+
+    return "\n\n".join(table_blocks)
