@@ -10,8 +10,9 @@ def execute_select_sql(sql: str) -> dict:
     if not normalized_sql:
         raise ValueError("SQL cannot be empty")
 
-    # 只允许 SELECT 查询，避免把这个调试接口误用成写操作入口。
-    if not normalized_sql.lower().startswith("select"):
+    # 只允许 SELECT / WITH 查询，避免把这个调试接口误用成写操作入口。
+    normalized_lower = normalized_sql.lstrip().lower()
+    if not (normalized_lower.startswith("select") or normalized_lower.startswith("with")):
         raise ValueError("Only SELECT statements are allowed")
 
     session = SessionLocal()
