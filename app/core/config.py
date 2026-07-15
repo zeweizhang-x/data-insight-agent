@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     LLM_BASE_URL: str = ""
     LLM_MODEL: str = ""
 
+    # Day 5：Schema RAG 相关配置。
+    EMBEDDING_MODEL: str = ""
+    CHROMA_PERSIST_DIR: str = ".chroma"
+
     # 告诉 pydantic-settings 去哪里找 .env 文件。
     # parents[2] 表示项目根目录，也就是 `data-insight-agent/.env`。
     model_config = SettingsConfigDict(
