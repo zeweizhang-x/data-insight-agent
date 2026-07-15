@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException
 from app.schemas.query import RawSqlRequest, TextToSqlRequest
 from app.services.query_service import execute_select_sql
 from app.services.text2sql_service import answer_question_with_sql
+from app.utils.sql_utils import ensure_limit, extract_sql_from_llm_output, validate_select_sql
 
 router = APIRouter()
 
@@ -36,3 +37,14 @@ def text_to_sql_query(payload: TextToSqlRequest):
         raise HTTPException(status_code=400, detail=_brief_error_detail(exc))
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=_brief_error_detail(exc))
+
+
+@router.post("/query/validate-sql")
+def validate_sql_query(payload: RawSqlRequest):
+    try:
+        sql = extract_sql_from_llm_output(payload.sql)
+        validate_select_sql(sql)
+        normalized_sql = ensure_limit(sql)
+        return {"valid": True, "sql": normalized_sql}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=_brief_error_detail(exc))
