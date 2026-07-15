@@ -17,11 +17,19 @@
 - `/health`
 - `/schema/list`
 - `/query/raw-sql`
+- `/query/validate-sql`（开发调试接口）
 - Day 3 Text-to-SQL MVP
   - LLM client
   - Text-to-SQL prompt
   - SQL 提取与基础校验
   - `/query/text-to-sql`
+- Day 4 Text-to-SQL 安全与修复增强
+  - 使用 `sqlglot` 增强 SQL 安全校验
+  - 限制只允许 `SELECT` / `WITH`
+  - 限制业务表白名单
+  - SQL 执行失败时自动修复一次
+  - `/query/text-to-sql` 返回 `original_sql`、`sql`、`repaired`、`repair_attempts`
+  - `/query/validate-sql` 作为开发调试接口
 
 ## 本地启动方式
 
@@ -63,6 +71,7 @@ uvicorn app.main:app --reload
 - 健康检查：`GET /health`
 - Schema 查看：`GET /schema/list`
 - 原始 SQL 查询：`POST /query/raw-sql`
+- SQL 校验调试：`POST /query/validate-sql`
 - Text-to-SQL：`POST /query/text-to-sql`
 
 ## 示例 SQL 查询
@@ -93,17 +102,43 @@ curl -X POST "http://127.0.0.1:8000/query/text-to-sql" \
   -d '{"question":"查询最近 7 天订单金额最高的前 10 个用户"}'
 ```
 
+流程说明：
+`question -> schema -> LLM SQL -> validation -> execution -> repair on failure -> final result`
+
 示例返回结构包含：
 - `question`
+- `original_sql`
 - `sql`
+- `repaired`
+- `repair_attempts`
 - `columns`
 - `rows`
 
+## `/query/validate-sql` 开发调试接口
+该接口只做 SQL 提取、基础校验和 LIMIT 归一化，不会执行 SQL。
+
+示例请求：
+```bash
+curl -X POST "http://127.0.0.1:8000/query/validate-sql" \
+  -H "Content-Type: application/json" \
+  -d '{"sql":"SELECT * FROM users"}'
+```
+
+示例返回：
+```json
+{
+  "valid": true,
+  "sql": "SELECT * FROM users LIMIT 100;"
+}
+```
+
 ## 当前限制
+- 只支持一次修复
 - 还没有 Schema RAG
-- 还没有 SQL 自动修复
+- 还没有评测集
+- 指标口径仍然依赖 prompt
 - 复杂 Join 可能失败
-- 目前只做基础 SQL 安全校验
+- 安全校验不是生产级权限系统
 
 ## 配置说明
 项目通过 `.env` 读取配置
