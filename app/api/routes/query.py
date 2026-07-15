@@ -7,6 +7,12 @@ from app.services.text2sql_service import answer_question_with_sql
 router = APIRouter()
 
 
+def _brief_error_detail(error: Exception) -> str:
+    """Return a short, user-facing error message."""
+    message = str(error).strip() or "Request failed"
+    return message[:200]
+
+
 @router.post("/query/raw-sql")
 def raw_sql_query(payload: RawSqlRequest):
     sql = payload.sql.strip()
@@ -27,9 +33,6 @@ def text_to_sql_query(payload: TextToSqlRequest):
     try:
         return answer_question_with_sql(payload.question)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except RuntimeError:
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to answer question with Text-to-SQL.",
-        )
+        raise HTTPException(status_code=400, detail=_brief_error_detail(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=_brief_error_detail(exc))
