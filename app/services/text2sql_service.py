@@ -9,6 +9,7 @@ from app.llm.prompts import build_sql_repair_messages, build_text_to_sql_message
 from app.services.query_service import execute_select_sql
 from app.services.schema_retriever_service import retrieve_schema
 from app.services.schema_service import get_schema_text
+from app.utils.cache_utils import get_json_cache, make_cache_key, set_json_cache
 from app.utils.sql_utils import (
     ensure_limit,
     extract_sql_from_llm_output,
@@ -17,6 +18,8 @@ from app.utils.sql_utils import (
 
 
 logger = get_logger(__name__)
+WORKFLOW_VERSION = "day6_v1"
+CACHE_TTL_SECONDS = 3600
 
 
 def _summarize_error(error: Exception | str) -> str:
@@ -100,6 +103,7 @@ def _build_response(
     repair_attempts: int,
     columns: list,
     rows: list,
+    cache_hit: bool,
     repair_error: str | None = None,
 ) -> dict:
     response = {
@@ -114,6 +118,7 @@ def _build_response(
         "repair_attempts": repair_attempts,
         "columns": columns,
         "rows": rows,
+        "cache_hit": cache_hit,
     }
     if schema_context["schema_retrieval_error"]:
         response["schema_retrieval_error"] = schema_context["schema_retrieval_error"]
@@ -134,6 +139,7 @@ def _finalize_success(
     repair_attempts: int,
     columns: list,
     rows: list,
+    cache_hit: bool,
     repair_error: str | None = None,
 ) -> dict:
     latency_ms = (time.perf_counter() - started_at) * 1000
@@ -151,6 +157,7 @@ def _finalize_success(
         repair_attempts=repair_attempts,
         columns=columns,
         rows=rows,
+        cache_hit=cache_hit,
         repair_error=repair_error,
     )
 
@@ -159,6 +166,35 @@ def _log_failure(trace_id: str, started_at: float, error_message: str, level: st
     latency_ms = (time.perf_counter() - started_at) * 1000
     log_method = logger.error if level == "error" else logger.warning
     log_method("trace_id=%s error=%s latency_ms=%.2f", trace_id, error_message, latency_ms)
+
+
+def _get_cached_result(question_text: str) -> dict | None:
+    cache_key = make_cache_key(
+        "text2sql",
+        {
+            "question": question_text,
+            "workflow_version": WORKFLOW_VERSION,
+        },
+    )
+    cached_result = get_json_cache(cache_key)
+    if isinstance(cached_result, dict):
+        return cached_result
+    return None
+
+
+def _save_cached_result(question_text: str, result: dict) -> None:
+    cache_key = make_cache_key(
+        "text2sql",
+        {
+            "question": question_text,
+            "workflow_version": WORKFLOW_VERSION,
+        },
+    )
+    try:
+        set_json_cache(cache_key, result, ttl_seconds=CACHE_TTL_SECONDS)
+        logger.info("cache saved trace_id=%s cache_key=%s", result.get("trace_id"), cache_key)
+    except Exception:
+        return
 
 
 def answer_question_with_sql(question: str) -> dict:
@@ -170,6 +206,19 @@ def answer_question_with_sql(question: str) -> dict:
     if not question_text:
         _log_failure(trace_id, started_at, "Question cannot be empty")
         raise ValueError("Question cannot be empty")
+
+    cached_result = _get_cached_result(question_text)
+    if cached_result is not None:
+        latency_ms = (time.perf_counter() - started_at) * 1000
+        logger.info("trace_id=%s cache hit", trace_id)
+        cached_result = dict(cached_result)
+        cached_result["trace_id"] = trace_id
+        cached_result["latency_ms"] = latency_ms
+        cached_result["cache_hit"] = True
+        logger.info("trace_id=%s latency_ms=%.2f", trace_id, latency_ms)
+        return cached_result
+
+    logger.info("trace_id=%s cache miss", trace_id)
 
     schema_context = _get_schema_context(question_text)
     schema_text = schema_context["schema_text"]
@@ -204,7 +253,7 @@ def answer_question_with_sql(question: str) -> dict:
                 _summarize_error(validation_exc),
             )
             repaired_result = _run_sql(repaired_sql)
-            return _finalize_success(
+            response = _finalize_success(
                 trace_id=trace_id,
                 started_at=started_at,
                 question=question_text,
@@ -216,7 +265,10 @@ def answer_question_with_sql(question: str) -> dict:
                 repair_error=_summarize_error(validation_exc),
                 columns=repaired_result["columns"],
                 rows=repaired_result["rows"],
+                cache_hit=False,
             )
+            _save_cached_result(question_text, response)
+            return response
         except ValueError as exc:
             _log_failure(trace_id, started_at, _summarize_error(exc))
             raise
@@ -233,7 +285,7 @@ def answer_question_with_sql(question: str) -> dict:
 
     try:
         result = _run_sql(original_sql)
-        return _finalize_success(
+        response = _finalize_success(
             trace_id=trace_id,
             started_at=started_at,
             question=question_text,
@@ -244,7 +296,10 @@ def answer_question_with_sql(question: str) -> dict:
             repair_attempts=0,
             columns=result["columns"],
             rows=result["rows"],
+            cache_hit=False,
         )
+        _save_cached_result(question_text, response)
+        return response
     except RuntimeError as exc:
         first_error = _summarize_error(exc)
         try:
@@ -265,7 +320,7 @@ def answer_question_with_sql(question: str) -> dict:
 
         try:
             repaired_result = _run_sql(repaired_sql)
-            return _finalize_success(
+            response = _finalize_success(
                 trace_id=trace_id,
                 started_at=started_at,
                 question=question_text,
@@ -277,7 +332,10 @@ def answer_question_with_sql(question: str) -> dict:
                 repair_error=first_error,
                 columns=repaired_result["columns"],
                 rows=repaired_result["rows"],
+                cache_hit=False,
             )
+            _save_cached_result(question_text, response)
+            return response
         except RuntimeError as repair_exec_exc:
             _log_failure(trace_id, started_at, _summarize_error(repair_exec_exc), level="error")
             raise RuntimeError(
