@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import time
+import uuid
+
+from app.core.logging import get_logger
 from app.llm.client import call_llm
 from app.llm.prompts import build_sql_repair_messages, build_text_to_sql_messages
 from app.services.query_service import execute_select_sql
@@ -10,6 +14,9 @@ from app.utils.sql_utils import (
     extract_sql_from_llm_output,
     validate_select_sql,
 )
+
+
+logger = get_logger(__name__)
 
 
 def _summarize_error(error: Exception | str) -> str:
@@ -83,6 +90,8 @@ def _get_schema_context(question: str) -> dict:
 
 def _build_response(
     *,
+    trace_id: str,
+    latency_ms: float,
     question: str,
     schema_context: dict,
     original_sql: str,
@@ -94,6 +103,8 @@ def _build_response(
     repair_error: str | None = None,
 ) -> dict:
     response = {
+        "trace_id": trace_id,
+        "latency_ms": latency_ms,
         "question": question,
         "schema_source": schema_context["schema_source"],
         "retrieved_tables": schema_context["retrieved_tables"],
@@ -111,21 +122,75 @@ def _build_response(
     return response
 
 
+def _finalize_success(
+    *,
+    trace_id: str,
+    started_at: float,
+    question: str,
+    schema_context: dict,
+    original_sql: str,
+    sql: str,
+    repaired: bool,
+    repair_attempts: int,
+    columns: list,
+    rows: list,
+    repair_error: str | None = None,
+) -> dict:
+    latency_ms = (time.perf_counter() - started_at) * 1000
+    logger.info("trace_id=%s final sql=%s", trace_id, sql)
+    logger.info("trace_id=%s repaired=%s repair_attempts=%s", trace_id, repaired, repair_attempts)
+    logger.info("trace_id=%s latency_ms=%.2f", trace_id, latency_ms)
+    return _build_response(
+        trace_id=trace_id,
+        latency_ms=latency_ms,
+        question=question,
+        schema_context=schema_context,
+        original_sql=original_sql,
+        sql=sql,
+        repaired=repaired,
+        repair_attempts=repair_attempts,
+        columns=columns,
+        rows=rows,
+        repair_error=repair_error,
+    )
+
+
+def _log_failure(trace_id: str, started_at: float, error_message: str, level: str = "warning") -> None:
+    latency_ms = (time.perf_counter() - started_at) * 1000
+    log_method = logger.error if level == "error" else logger.warning
+    log_method("trace_id=%s error=%s latency_ms=%.2f", trace_id, error_message, latency_ms)
+
+
 def answer_question_with_sql(question: str) -> dict:
+    trace_id = uuid.uuid4().hex
+    started_at = time.perf_counter()
     question_text = question.strip()
+    logger.info("trace_id=%s start processing question=%s", trace_id, question_text)
+
     if not question_text:
+        _log_failure(trace_id, started_at, "Question cannot be empty")
         raise ValueError("Question cannot be empty")
 
     schema_context = _get_schema_context(question_text)
     schema_text = schema_context["schema_text"]
+    logger.info(
+        "trace_id=%s schema_source=%s retrieved_tables=%s",
+        trace_id,
+        schema_context["schema_source"],
+        schema_context["retrieved_tables"],
+    )
 
     try:
         original_sql = _build_sql(question_text, schema_text)
-    except ValueError:
+        logger.info("trace_id=%s original_sql=%s", trace_id, original_sql)
+    except ValueError as exc:
+        _log_failure(trace_id, started_at, _summarize_error(exc))
         raise
-    except RuntimeError:
+    except RuntimeError as exc:
+        _log_failure(trace_id, started_at, _summarize_error(exc), level="error")
         raise
     except Exception as exc:
+        _log_failure(trace_id, started_at, _summarize_error(exc), level="error")
         raise RuntimeError(f"Text-to-SQL failed: {exc}") from exc
 
     try:
@@ -139,7 +204,9 @@ def answer_question_with_sql(question: str) -> dict:
                 _summarize_error(validation_exc),
             )
             repaired_result = _run_sql(repaired_sql)
-            return _build_response(
+            return _finalize_success(
+                trace_id=trace_id,
+                started_at=started_at,
                 question=question_text,
                 schema_context=schema_context,
                 original_sql=original_sql,
@@ -150,11 +217,14 @@ def answer_question_with_sql(question: str) -> dict:
                 columns=repaired_result["columns"],
                 rows=repaired_result["rows"],
             )
-        except ValueError:
+        except ValueError as exc:
+            _log_failure(trace_id, started_at, _summarize_error(exc))
             raise
-        except RuntimeError:
+        except RuntimeError as exc:
+            _log_failure(trace_id, started_at, _summarize_error(exc), level="error")
             raise
         except Exception as repair_exc:
+            _log_failure(trace_id, started_at, _summarize_error(repair_exc), level="error")
             raise RuntimeError(
                 "Text-to-SQL repair failed: "
                 f"original_sql={original_sql}; original_error={_summarize_error(validation_exc)}; "
@@ -163,7 +233,9 @@ def answer_question_with_sql(question: str) -> dict:
 
     try:
         result = _run_sql(original_sql)
-        return _build_response(
+        return _finalize_success(
+            trace_id=trace_id,
+            started_at=started_at,
             question=question_text,
             schema_context=schema_context,
             original_sql=original_sql,
@@ -177,11 +249,14 @@ def answer_question_with_sql(question: str) -> dict:
         first_error = _summarize_error(exc)
         try:
             repaired_sql = _repair_sql(question_text, schema_text, original_sql, first_error)
-        except ValueError:
+        except ValueError as repair_exc:
+            _log_failure(trace_id, started_at, _summarize_error(repair_exc))
             raise
-        except RuntimeError:
+        except RuntimeError as repair_exc:
+            _log_failure(trace_id, started_at, _summarize_error(repair_exc), level="error")
             raise
         except Exception as repair_exc:
+            _log_failure(trace_id, started_at, _summarize_error(repair_exc), level="error")
             raise RuntimeError(
                 "Text-to-SQL repair failed: "
                 f"original_sql={original_sql}; original_error={first_error}; "
@@ -190,7 +265,9 @@ def answer_question_with_sql(question: str) -> dict:
 
         try:
             repaired_result = _run_sql(repaired_sql)
-            return _build_response(
+            return _finalize_success(
+                trace_id=trace_id,
+                started_at=started_at,
                 question=question_text,
                 schema_context=schema_context,
                 original_sql=original_sql,
@@ -202,6 +279,7 @@ def answer_question_with_sql(question: str) -> dict:
                 rows=repaired_result["rows"],
             )
         except RuntimeError as repair_exec_exc:
+            _log_failure(trace_id, started_at, _summarize_error(repair_exec_exc), level="error")
             raise RuntimeError(
                 "Text-to-SQL repair failed: "
                 f"original_sql={original_sql}; original_error={first_error}; "
