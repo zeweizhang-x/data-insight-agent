@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.llm.client import call_llm
 from app.llm.prompts import build_sql_repair_messages, build_text_to_sql_messages
 from app.services.query_service import execute_select_sql
+from app.services.schema_retriever_service import retrieve_schema
 from app.services.schema_service import get_schema_text
 from app.utils.sql_utils import (
     ensure_limit,
@@ -58,12 +59,65 @@ def _run_sql(sql: str) -> dict:
     return execute_select_sql(sql)
 
 
+def _get_schema_context(question: str) -> dict:
+    try:
+        retrieved_schema = retrieve_schema(question, top_k=3)
+        return {
+            "schema_text": retrieved_schema["schema_text"],
+            "schema_source": "rag",
+            "retrieved_tables": [
+                document.get("metadata", {}).get("table_name", "")
+                for document in retrieved_schema.get("documents", [])
+                if document.get("metadata", {}).get("table_name")
+            ],
+            "schema_retrieval_error": None,
+        }
+    except Exception as exc:
+        return {
+            "schema_text": get_schema_text(),
+            "schema_source": "full_schema_fallback",
+            "retrieved_tables": [],
+            "schema_retrieval_error": _summarize_error(exc),
+        }
+
+
+def _build_response(
+    *,
+    question: str,
+    schema_context: dict,
+    original_sql: str,
+    sql: str,
+    repaired: bool,
+    repair_attempts: int,
+    columns: list,
+    rows: list,
+    repair_error: str | None = None,
+) -> dict:
+    response = {
+        "question": question,
+        "schema_source": schema_context["schema_source"],
+        "retrieved_tables": schema_context["retrieved_tables"],
+        "original_sql": original_sql,
+        "sql": sql,
+        "repaired": repaired,
+        "repair_attempts": repair_attempts,
+        "columns": columns,
+        "rows": rows,
+    }
+    if schema_context["schema_retrieval_error"]:
+        response["schema_retrieval_error"] = schema_context["schema_retrieval_error"]
+    if repair_error is not None:
+        response["repair_error"] = repair_error
+    return response
+
+
 def answer_question_with_sql(question: str) -> dict:
     question_text = question.strip()
     if not question_text:
         raise ValueError("Question cannot be empty")
 
-    schema_text = get_schema_text()
+    schema_context = _get_schema_context(question_text)
+    schema_text = schema_context["schema_text"]
 
     try:
         original_sql = _build_sql(question_text, schema_text)
@@ -85,16 +139,17 @@ def answer_question_with_sql(question: str) -> dict:
                 _summarize_error(validation_exc),
             )
             repaired_result = _run_sql(repaired_sql)
-            return {
-                "question": question_text,
-                "original_sql": original_sql,
-                "sql": repaired_sql,
-                "repaired": True,
-                "repair_attempts": 1,
-                "repair_error": _summarize_error(validation_exc),
-                "columns": repaired_result["columns"],
-                "rows": repaired_result["rows"],
-            }
+            return _build_response(
+                question=question_text,
+                schema_context=schema_context,
+                original_sql=original_sql,
+                sql=repaired_sql,
+                repaired=True,
+                repair_attempts=1,
+                repair_error=_summarize_error(validation_exc),
+                columns=repaired_result["columns"],
+                rows=repaired_result["rows"],
+            )
         except ValueError:
             raise
         except RuntimeError:
@@ -108,15 +163,16 @@ def answer_question_with_sql(question: str) -> dict:
 
     try:
         result = _run_sql(original_sql)
-        return {
-            "question": question_text,
-            "original_sql": original_sql,
-            "sql": original_sql,
-            "repaired": False,
-            "repair_attempts": 0,
-            "columns": result["columns"],
-            "rows": result["rows"],
-        }
+        return _build_response(
+            question=question_text,
+            schema_context=schema_context,
+            original_sql=original_sql,
+            sql=original_sql,
+            repaired=False,
+            repair_attempts=0,
+            columns=result["columns"],
+            rows=result["rows"],
+        )
     except RuntimeError as exc:
         first_error = _summarize_error(exc)
         try:
@@ -134,16 +190,17 @@ def answer_question_with_sql(question: str) -> dict:
 
         try:
             repaired_result = _run_sql(repaired_sql)
-            return {
-                "question": question_text,
-                "original_sql": original_sql,
-                "sql": repaired_sql,
-                "repaired": True,
-                "repair_attempts": 1,
-                "repair_error": first_error,
-                "columns": repaired_result["columns"],
-                "rows": repaired_result["rows"],
-            }
+            return _build_response(
+                question=question_text,
+                schema_context=schema_context,
+                original_sql=original_sql,
+                sql=repaired_sql,
+                repaired=True,
+                repair_attempts=1,
+                repair_error=first_error,
+                columns=repaired_result["columns"],
+                rows=repaired_result["rows"],
+            )
         except RuntimeError as repair_exec_exc:
             raise RuntimeError(
                 "Text-to-SQL repair failed: "
