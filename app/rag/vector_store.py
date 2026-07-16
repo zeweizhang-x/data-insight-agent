@@ -24,10 +24,9 @@ def get_schema_collection() -> Collection:
 
 def reset_schema_collection() -> Collection:
     client = _get_chroma_client()
-    try:
+    existing_names = {collection.name for collection in client.list_collections()}
+    if SCHEMA_COLLECTION_NAME in existing_names:
         client.delete_collection(name=SCHEMA_COLLECTION_NAME)
-    except ValueError:
-        pass
     return client.get_or_create_collection(name=SCHEMA_COLLECTION_NAME)
 
 
