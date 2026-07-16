@@ -30,6 +30,13 @@
   - SQL 执行失败时自动修复一次
   - `/query/text-to-sql` 返回 `original_sql`、`sql`、`repaired`、`repair_attempts`
   - `/query/validate-sql` 作为开发调试接口
+- Day 5 Schema RAG
+  - schema 文档 `docs/schema/ecommerce_schema.md`
+  - embedding client
+  - Chroma 本地向量库
+  - schema indexing 脚本
+  - `/schema/search` 接口
+  - `/query/text-to-sql` 优先使用 Schema RAG，失败时 fallback 到 full schema
 
 ## 本地启动方式
 
@@ -39,6 +46,8 @@
 LLM_API_KEY=your_api_key
 LLM_BASE_URL=https://your-openai-compatible-base-url/v1
 LLM_MODEL=your-model-name
+EMBEDDING_MODEL=your-embedding-model-name
+CHROMA_PERSIST_DIR=.chroma
 ```
 
 ### 2. 激活虚拟环境
@@ -73,6 +82,7 @@ uvicorn app.main:app --reload
 - 原始 SQL 查询：`POST /query/raw-sql`
 - SQL 校验调试：`POST /query/validate-sql`
 - Text-to-SQL：`POST /query/text-to-sql`
+- Schema 搜索：`POST /schema/search`
 
 ## 示例 SQL 查询
 ```sql
@@ -103,16 +113,37 @@ curl -X POST "http://127.0.0.1:8000/query/text-to-sql" \
 ```
 
 流程说明：
-`question -> schema -> LLM SQL -> validation -> execution -> repair on failure -> final result`
+`question -> schema retrieval -> prompt -> LLM SQL -> validation -> execution -> repair`
 
 示例返回结构包含：
 - `question`
+- `schema_source`
+- `retrieved_tables`
+- `schema_retrieval_error`（仅 fallback 时返回）
 - `original_sql`
 - `sql`
 - `repaired`
 - `repair_attempts`
 - `columns`
 - `rows`
+
+## `/schema/search` 示例请求
+```bash
+curl -X POST "http://127.0.0.1:8000/schema/search" \
+  -H "Content-Type: application/json" \
+  -d '{"question":"查询订单金额最高的用户相关表结构", "top_k": 3}'
+```
+
+示例返回结构包含：
+- `question`
+- `top_k`
+- `documents`
+- `schema_text`
+
+## Schema RAG 构建命令
+```bash
+python scripts/index_schema_docs.py
+```
 
 ## `/query/validate-sql` 开发调试接口
 该接口只做 SQL 提取、基础校验和 LIMIT 归一化，不会执行 SQL。
@@ -134,9 +165,11 @@ curl -X POST "http://127.0.0.1:8000/query/validate-sql" \
 
 ## 当前限制
 - 只支持一次修复
-- 还没有 Schema RAG
+- 只使用简单的 `top_k` 检索
+- 还没有 reranker
 - 还没有评测集
-- 指标口径仍然依赖 prompt
+- schema 文档还需要持续完善
+- 指标口径仍然比较简单
 - 复杂 Join 可能失败
 - 安全校验不是生产级权限系统
 
