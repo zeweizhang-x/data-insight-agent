@@ -38,6 +38,16 @@
   - schema indexing 脚本
   - `/schema/search` 接口
   - `/query/text-to-sql` 优先使用 Schema RAG，失败时 fallback 到 full schema
+- Day 6 Redis 缓存与日志
+  - Redis client
+  - Text-to-SQL 结果缓存
+  - Schema Retrieval 缓存
+  - trace_id
+  - latency_ms
+  - cache_hit
+  - 统一日志
+  - `/system/health`
+  - `/system/cache/stats`
 
 ## 本地启动方式
 
@@ -115,7 +125,7 @@ curl -X POST "http://127.0.0.1:8000/query/text-to-sql" \
 ```
 
 流程说明：
-`question -> schema retrieval -> prompt -> LLM SQL -> validation -> execution -> repair`
+`question -> cache lookup -> schema retrieval -> LLM SQL -> validation -> execution -> repair -> cache save -> response`
 
 示例返回结构包含：
 - `question`
@@ -182,11 +192,20 @@ curl -X GET "http://127.0.0.1:8000/system/cache/stats"
 }
 ```
 
+## Redis 检查命令
+```bash
+docker exec -it data_agent_redis redis-cli ping
+docker exec -it data_agent_redis redis-cli keys "text2sql:*"
+```
+
 ## 当前限制
 - 只支持一次修复
 - 只使用简单的 `top_k` 检索
 - 还没有 reranker
-- 还没有评测集
+- 缓存是 TTL 简单策略
+- 数据变化后缓存可能短时间不一致
+- 日志只输出到控制台
+- 还没有完整评测集
 - schema 文档还需要持续完善
 - 指标口径仍然比较简单
 - 复杂 Join 可能失败
