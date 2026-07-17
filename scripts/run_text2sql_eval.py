@@ -1,20 +1,26 @@
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 import time
 from pathlib import Path
 from typing import Iterable
-from tqdm import tqdm
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from app.core.redis_client import get_redis_client
 from app.services.text2sql_service import answer_question_with_sql
 
 EVAL_CASES_PATH = PROJECT_ROOT / "evals" / "text2sql_eval_cases.json"
 EVAL_RESULTS_PATH = PROJECT_ROOT / "evals" / "results" / "text2sql_eval_results.jsonl"
+
+try:
+    from tqdm import tqdm
+except Exception:  # pragma: no cover - optional dependency
+    tqdm = None
 
 def _load_cases() -> list[dict]:
     with EVAL_CASES_PATH.open("r", encoding="utf-8") as file:
@@ -25,6 +31,39 @@ def _iter_cases(cases: list[dict]) -> Iterable[dict]:
     if tqdm is None:
         return cases
     return tqdm(cases, desc="Evaluating", unit="case")
+
+
+def _clear_cache() -> None:
+    try:
+        redis_client = get_redis_client()
+        for cache_key in redis_client.scan_iter(match="text2sql:*"):
+            redis_client.delete(cache_key)
+        for cache_key in redis_client.scan_iter(match="schema_retrieval:*"):
+            redis_client.delete(cache_key)
+    except Exception:
+        return
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run Text-to-SQL eval cases")
+    parser.add_argument(
+        "--clear-cache",
+        action="store_true",
+        help="Clear Redis caches before evaluation",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Run only the first N cases",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=EVAL_RESULTS_PATH,
+        help="JSONL output path",
+    )
+    return parser.parse_args()
 
 
 
@@ -177,8 +216,16 @@ def _evaluate_case(case: dict) -> dict:
 
 
 def main() -> None:
+    args = _parse_args()
+    if args.clear_cache:
+        _clear_cache()
+
     cases = _load_cases()
-    EVAL_RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if args.limit is not None:
+        cases = cases[: max(args.limit, 0)]
+
+    output_path: Path = args.output
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     total = len(cases)
     success_count = 0
@@ -187,7 +234,7 @@ def main() -> None:
     repaired_count = 0
     cache_hit_count = 0
 
-    with EVAL_RESULTS_PATH.open("w", encoding="utf-8") as output_file:
+    with output_path.open("w", encoding="utf-8") as output_file:
         for case in _iter_cases(cases):
             result = _evaluate_case(case)
             output_file.write(json.dumps(result, ensure_ascii=False) + "\n")
@@ -213,7 +260,7 @@ def main() -> None:
     print(f"average_latency_ms: {average_latency_ms:.2f}")
     print(f"repaired_count: {repaired_count}")
     print(f"cache_hit_count: {cache_hit_count}")
-    print(f"results_file: {EVAL_RESULTS_PATH}")
+    print(f"results_file: {output_path}")
 
 
 if __name__ == "__main__":
