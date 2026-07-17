@@ -18,6 +18,7 @@
 - `/schema/list`
 - `/query/raw-sql`
 - `/query/validate-sql`（开发调试接口）
+- `/system/cache/stats`（开发调试接口）
 - Day 3 Text-to-SQL MVP
   - LLM client
   - Text-to-SQL prompt
@@ -81,6 +82,7 @@ uvicorn app.main:app --reload
 - Schema 查看：`GET /schema/list`
 - 原始 SQL 查询：`POST /query/raw-sql`
 - SQL 校验调试：`POST /query/validate-sql`
+- 系统缓存统计调试：`GET /system/cache/stats`
 - Text-to-SQL：`POST /query/text-to-sql`
 - Schema 搜索：`POST /schema/search`
 
@@ -160,6 +162,23 @@ curl -X POST "http://127.0.0.1:8000/query/validate-sql" \
 {
   "valid": true,
   "sql": "SELECT * FROM users LIMIT 100;"
+}
+```
+
+## `/system/cache/stats` 开发调试接口
+该接口用于查看当前 Redis 中的缓存键数量，使用 `scan_iter` 统计，不会抛出 500。
+
+示例请求：
+```bash
+curl -X GET "http://127.0.0.1:8000/system/cache/stats"
+```
+
+示例返回：
+```json
+{
+  "redis": true,
+  "text2sql_cache_keys": 12,
+  "schema_retrieval_cache_keys": 8
 }
 ```
 
