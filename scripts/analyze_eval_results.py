@@ -67,32 +67,30 @@ def _join_list(value: Any) -> str:
 def _classify_bad_case(result: dict[str, Any]) -> str:
     expect_success = bool(result.get("expect_success", True))
     category = str(result.get("category", ""))
-    error_text = str(result.get("error", "") or "").lower()
     sql_text = str(result.get("sql", "") or "").lower()
     original_sql_text = str(result.get("original_sql", "") or "").lower()
     combined_sql = f"{sql_text} {original_sql_text}"
     retrieved_tables = [str(item).lower() for item in result.get("retrieved_tables", []) if item]
     expected_tables = [str(item).lower() for item in result.get("expected_tables", []) if item]
+    table_recall_pass = bool(result.get("table_recall_pass", True))
+    required_keywords_pass = bool(result.get("required_keywords_pass", True))
+    execution_success = bool(result.get("execution_success", False))
+    forbidden_keywords_pass = bool(result.get("forbidden_keywords_pass", True))
 
     if category == "safety" or not expect_success:
-        if not result.get("success"):
-            if any(keyword in error_text for keyword in ["deny", "forbidden", "unsafe", "not allowed", "reject", "validation"]):
-                return "safety_error"
-            return "safety_error"
-        return "other"
+        return "safety_error" if not result.get("success") else "other"
 
-    if expected_tables and not all(table in retrieved_tables or table in combined_sql for table in expected_tables):
+    if not table_recall_pass:
         return "schema_retrieval_error"
 
-    if not result.get("execution_success"):
+    if not required_keywords_pass:
+        return "sql_generation_error"
+
+    if not execution_success:
         return "sql_execution_error"
 
-    # required_keywords = [str(item).lower() for item in result.get("required_sql_keywords", []) if item]
-    # if required_keywords and not all(keyword in combined_sql for keyword in required_keywords):
-    #     return "sql_generation_error"
-
-    if not result.get("required_keywords_pass", True):
-        return "sql_generation_error"
+    if not forbidden_keywords_pass:
+        return "safety_error"
 
     return "other"
 
@@ -139,6 +137,9 @@ def _build_summary(results: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[
 
     failed_cases = [item for item in results if not item.get("success")]
     bad_case_counter: Counter[str] = Counter(_classify_bad_case(item) for item in failed_cases)
+
+    for item in failed_cases:
+        item["bad_case_type"] = _classify_bad_case(item)
 
     return summary, category_stats, failed_cases, bad_case_counter
 
@@ -199,6 +200,7 @@ def _render_report(
                 [
                     _clip_text(item.get("id"), 24),
                     _clip_text(item.get("category"), 18),
+                    _clip_text(item.get("bad_case_type"), 24),
                     _clip_text(item.get("question"), 48),
                     _clip_text(item.get("error"), 60),
                     _clip_text(item.get("sql"), 80),
@@ -209,12 +211,30 @@ def _render_report(
             )
         lines.append(
             _markdown_table(
-                ["id", "category", "question", "error", "sql", "retrieved_tables", "repaired", "repair_attempts"],
+                ["id", "category", "bad_case_type", "question", "error", "sql", "retrieved_tables", "repaired", "repair_attempts"],
                 failure_rows,
             )
         )
     else:
         lines.append("_No failure cases._")
+    lines.append("")
+
+    lines.append("## Bad Case Type Counts")
+    lines.append("")
+    bad_case_type_rows = [
+        [
+            bad_case_type,
+            str(bad_case_counter.get(bad_case_type, 0)),
+        ]
+        for bad_case_type in [
+            "schema_retrieval_error",
+            "sql_generation_error",
+            "sql_execution_error",
+            "safety_error",
+            "other",
+        ]
+    ]
+    lines.append(_markdown_table(["bad_case_type", "count"], bad_case_type_rows))
     lines.append("")
 
     lines.append("## Bad Case Suggestions")
