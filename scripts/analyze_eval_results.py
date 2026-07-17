@@ -87,9 +87,9 @@ def _classify_bad_case(result: dict[str, Any]) -> str:
     if not result.get("execution_success"):
         return "sql_execution_error"
 
-    required_keywords = [str(item).lower() for item in result.get("required_sql_keywords", []) if item]
-    if required_keywords and not all(keyword in combined_sql for keyword in required_keywords):
-        return "sql_generation_error"
+    # required_keywords = [str(item).lower() for item in result.get("required_sql_keywords", []) if item]
+    # if required_keywords and not all(keyword in combined_sql for keyword in required_keywords):
+    #     return "sql_generation_error"
 
     if not result.get("required_keywords_pass", True):
         return "sql_generation_error"
