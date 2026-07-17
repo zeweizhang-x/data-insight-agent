@@ -48,6 +48,13 @@
   - 统一日志
   - `/system/health`
   - `/system/cache/stats`
+- Day 7 Text-to-SQL 评测集和 Bad Case 分析
+  - `evals/text2sql_eval_cases.json`
+  - `scripts/run_text2sql_eval.py`
+  - `scripts/analyze_eval_results.py`
+  - `evals/results/text2sql_eval_results.jsonl`
+  - `evals/results/text2sql_eval_report.md`
+  - `docs/day7_eval_bad_cases.md`
 
 ## 本地启动方式
 
@@ -157,6 +164,37 @@ curl -X POST "http://127.0.0.1:8000/schema/search" \
 python scripts/index_schema_docs.py
 ```
 
+## Day 7 评测流程
+1. 启动 Docker：`docker compose up -d`
+2. 重建 Schema RAG 索引：`python scripts/index_schema_docs.py`
+3. 运行评测脚本：`python scripts/run_text2sql_eval.py`
+4. 生成评测报告：`python scripts/analyze_eval_results.py`
+
+评测脚本支持的参数：
+```bash
+python scripts/run_text2sql_eval.py --clear-cache
+python scripts/run_text2sql_eval.py --limit 5
+python scripts/run_text2sql_eval.py --output evals/results/custom_eval_results.jsonl
+```
+默认输出路径：`evals/results/text2sql_eval_results.jsonl`。
+
+评测命令：
+```bash
+python scripts/run_text2sql_eval.py
+python scripts/analyze_eval_results.py
+```
+
+
+## Day 7 评测指标说明
+当前报告会统计以下指标：
+- execution success rate
+- table recall pass rate
+- required keyword pass rate
+- forbidden keyword pass rate
+- repaired count
+- cache hit count
+- average latency
+
 ## `/query/validate-sql` 开发调试接口
 该接口只做 SQL 提取、基础校验和 LIMIT 归一化，不会执行 SQL。
 
@@ -205,7 +243,11 @@ docker exec -it data_agent_redis redis-cli keys "text2sql:*"
 - 缓存是 TTL 简单策略
 - 数据变化后缓存可能短时间不一致
 - 日志只输出到控制台
-- 还没有完整评测集
+- 评测集规模还小
+- keyword 判断不能完全代表 SQL 语义正确
+- 没有人工标注 gold SQL
+- 没有结果级精确对比
+- 复杂业务指标还需要更强口径文档
 - schema 文档还需要持续完善
 - 指标口径仍然比较简单
 - 复杂 Join 可能失败
