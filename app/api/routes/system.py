@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 from sqlalchemy import text
 
-from app.core.redis_client import ping_redis
+from app.core.redis_client import get_redis_client, ping_redis
 from app.db.session import SessionLocal
 from app.rag.vector_store import get_schema_collection
 
@@ -28,6 +28,25 @@ def system_health_check() -> dict:
     }
 
 
+@router.get("/system/cache/stats")
+def system_cache_stats() -> dict:
+    try:
+        redis_client = get_redis_client()
+        text2sql_cache_keys = _count_cache_keys(redis_client, "text2sql:")
+        schema_retrieval_cache_keys = _count_cache_keys(redis_client, "schema_retrieval:")
+        return {
+            "redis": True,
+            "text2sql_cache_keys": text2sql_cache_keys,
+            "schema_retrieval_cache_keys": schema_retrieval_cache_keys,
+        }
+    except Exception:
+        return {
+            "redis": False,
+            "text2sql_cache_keys": 0,
+            "schema_retrieval_cache_keys": 0,
+        }
+
+
 def _check_postgres() -> bool:
     try:
         db = SessionLocal()
@@ -47,3 +66,10 @@ def _check_chroma() -> bool:
         return True
     except Exception:
         return False
+
+
+def _count_cache_keys(redis_client, prefix: str) -> int:
+    count = 0
+    for _key in redis_client.scan_iter(match=f"{prefix}*"):
+        count += 1
+    return count
